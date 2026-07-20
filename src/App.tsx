@@ -38,9 +38,13 @@ import {
 } from 'lucide-react'
 
 type UploadedFile = {
+  id: string
   name: string
   detail: string
   kind: 'pdf' | 'image' | 'email' | 'other'
+  previewUrl?: string
+  serverUrl?: string
+  status: 'analyzed' | 'uploading' | 'uploaded' | 'error'
 }
 
 const recentRfis = [
@@ -51,10 +55,17 @@ const recentRfis = [
 ]
 
 const defaultFiles: UploadedFile[] = [
-  { name: 'RE_ Corridor ceiling conflict.eml', detail: 'Email · 284 KB', kind: 'email' },
-  { name: 'IMG_2847.jpg', detail: 'Photo · 2.4 MB', kind: 'image' },
-  { name: 'A401_Level 2 RCP.pdf', detail: 'Drawing · 4.1 MB', kind: 'pdf' },
+  { id: 'sample-email', name: 'RE_ Corridor ceiling conflict.eml', detail: 'Email · 284 KB', kind: 'email', status: 'analyzed' },
+  { id: 'sample-image', name: 'IMG_2847.jpg', detail: 'Photo · 2.4 MB', kind: 'image', status: 'analyzed' },
+  { id: 'sample-drawing', name: 'A401_Level 2 RCP.pdf', detail: 'Drawing · 4.1 MB', kind: 'pdf', status: 'analyzed' },
 ]
+
+type UploadResponse = {
+  files: Array<{
+    url: string
+  }>
+  error?: string
+}
 
 const fileIcon = (kind: UploadedFile['kind']) => {
   if (kind === 'image') return <FileImage size={17} />
@@ -81,20 +92,68 @@ function App() {
   const [exportOpen, setExportOpen] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  const addFiles = (incoming: FileList | null) => {
+  const addFiles = async (incoming: FileList | null) => {
     if (!incoming) return
-    const mapped = Array.from(incoming).map((item) => ({
-      name: item.name,
-      detail: `${item.type.includes('image') ? 'Photo' : item.name.endsWith('.pdf') ? 'Document' : 'File'} · ${(item.size / 1024 / 1024).toFixed(1)} MB`,
-      kind: (item.type.includes('image') ? 'image' : item.name.endsWith('.pdf') ? 'pdf' : item.name.endsWith('.eml') ? 'email' : 'other') as UploadedFile['kind'],
+    const selectedFiles = Array.from(incoming)
+    const pendingFiles = selectedFiles.map((item) => {
+      const kind = (item.type.startsWith('image/') ? 'image' : item.name.toLowerCase().endsWith('.pdf') ? 'pdf' : item.name.toLowerCase().endsWith('.eml') ? 'email' : 'other') as UploadedFile['kind']
+      const size = item.size >= 1024 * 1024
+        ? `${(item.size / 1024 / 1024).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(item.size / 1024))} KB`
+
+      return {
+        source: item,
+        entry: {
+          id: crypto.randomUUID(),
+          name: item.name,
+          detail: `${kind === 'image' ? 'Photo' : kind === 'pdf' ? 'Document' : kind === 'email' ? 'Email' : 'File'} · ${size}`,
+          kind,
+          previewUrl: kind === 'image' ? URL.createObjectURL(item) : undefined,
+          status: 'uploading' as const,
+        },
+      }
+    })
+
+    setFiles((current) => [...current, ...pendingFiles.map(({ entry }) => entry)])
+
+    await Promise.all(pendingFiles.map(async ({ source, entry }) => {
+      const formData = new FormData()
+      formData.append('files', source)
+
+      try {
+        const response = await fetch('/api/uploads', {
+          method: 'POST',
+          body: formData,
+        })
+        const result = await response.json() as UploadResponse
+
+        if (!response.ok || !result.files[0]) {
+          throw new Error(result.error || 'Upload failed')
+        }
+
+        setFiles((current) => current.map((file) => file.id === entry.id
+          ? { ...file, serverUrl: result.files[0].url, status: 'uploaded' }
+          : file))
+      } catch {
+        setFiles((current) => current.map((file) => file.id === entry.id
+          ? { ...file, status: 'error' }
+          : file))
+      }
     }))
-    setFiles((current) => [...current, ...mapped])
   }
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
-    addFiles(event.dataTransfer.files)
+    void addFiles(event.dataTransfer.files)
+  }
+
+  const removeFile = (id: string) => {
+    setFiles((current) => {
+      const removedFile = current.find((file) => file.id === id)
+      if (removedFile?.previewUrl) URL.revokeObjectURL(removedFile.previewUrl)
+      return current.filter((file) => file.id !== id)
+    })
   }
 
   const handleGenerate = () => {
@@ -237,7 +296,16 @@ function App() {
                 onDrop={handleDrop}
                 onClick={() => fileInput.current?.click()}
               >
-                <input ref={fileInput} type="file" multiple hidden onChange={(event: ChangeEvent<HTMLInputElement>) => addFiles(event.target.files)} />
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    void addFiles(event.target.files)
+                    event.target.value = ''
+                  }}
+                />
                 <div className="upload-icon"><UploadCloud size={21} /></div>
                 <div><strong>Drop files here or <span>browse</span></strong><small>Emails, drawings, photos, PDFs, audio, video, or documents</small></div>
                 <button
@@ -249,12 +317,19 @@ function App() {
               </div>
 
               <div className="file-list">
-                {files.map((item, index) => (
-                  <div className="file-row" key={`${item.name}-${index}`}>
-                    <div className={`file-type ${item.kind}`}>{fileIcon(item.kind)}</div>
+                {files.map((item) => (
+                  <div className="file-row" key={item.id}>
+                    <div className={`file-type ${item.kind}`}>
+                      {item.kind === 'image' && (item.previewUrl || item.serverUrl)
+                        ? <img className="file-preview" src={item.previewUrl || item.serverUrl} alt={`Preview of ${item.name}`} />
+                        : fileIcon(item.kind)}
+                    </div>
                     <div className="file-copy"><strong>{item.name}</strong><span>{item.detail}</span></div>
-                    <span className="analysis-status"><CheckCircle2 size={14} /> Analyzed</span>
-                    <button className="remove-file" onClick={() => setFiles((items) => items.filter((_, itemIndex) => itemIndex !== index))}><X size={15} /></button>
+                    <span className={`analysis-status ${item.status}`}>
+                      {item.status === 'uploading' ? <span className="spinner" /> : item.status === 'error' ? <X size={14} /> : <CheckCircle2 size={14} />}
+                      {item.status === 'uploading' ? 'Uploading…' : item.status === 'error' ? 'Upload failed' : item.status === 'uploaded' ? 'Uploaded' : 'Analyzed'}
+                    </span>
+                    <button className="remove-file" onClick={() => removeFile(item.id)}><X size={15} /></button>
                   </div>
                 ))}
               </div>
