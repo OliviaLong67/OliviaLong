@@ -62,7 +62,7 @@ const defaultFiles: UploadedFile[] = [
 
 type UploadResponse = {
   files: Array<{
-    url: string
+    url?: string
   }>
   error?: string
 }
