@@ -10,7 +10,7 @@ const allowedExtensions = new Set([
   '.webp',
 ])
 
-const isSupportedType = (file: File) => {
+const isSupportedType = (file) => {
   const extension = path.extname(file.name).toLowerCase()
   const hasSupportedMimeType =
     file.type.startsWith('image/') ||
@@ -26,7 +26,7 @@ const isSupportedType = (file: File) => {
   return allowedExtensions.has(extension) && hasSupportedMimeType
 }
 
-const hasValidImageSignature = async (file: File) => {
+const hasValidImageSignature = async (file) => {
   if (file.type !== 'image/jpeg' && file.type !== 'image/png') return true
 
   const signature = new Uint8Array(await file.slice(0, 8).arrayBuffer())
@@ -45,7 +45,7 @@ const hasValidImageSignature = async (file: File) => {
     signature[7] === 0x0a
 }
 
-const json = (body: unknown, status: number) => Response.json(body, {
+const json = (body, status) => Response.json(body, {
   status,
   headers: {
     'Cache-Control': 'no-store',
@@ -54,14 +54,14 @@ const json = (body: unknown, status: number) => Response.json(body, {
 })
 
 export default {
-  async fetch(request: Request) {
+  async fetch(request) {
     if (request.method !== 'POST') {
       return json({ error: 'Method not allowed.' }, 405)
     }
 
     try {
       const formData = await request.formData()
-      const files = formData.getAll('files').filter((value): value is File => value instanceof File)
+      const files = formData.getAll('files').filter((value) => value instanceof File)
 
       if (!files.length) {
         return json({ error: 'No supported files were provided.' }, 400)
